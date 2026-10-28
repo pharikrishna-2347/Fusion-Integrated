@@ -5,37 +5,111 @@ defines its permissions, navigation items, and module-level grants.
 """
 
 from modules.accesscontrol.models import Module, NavItem
-from modules.elm.models import LeaveCategory
 
+MODULE = {
+    "code": "modules.elm",
+    "label": "Employee Leave Management",
+    "icon": "Leaf",
+    "base_path": "/elm",
+    "nav_section": "Employee Leave Management",
+    "sort_order": 20,
+    "status": "active",
+}
+
+NAV_ITEMS = [
+    {
+        "code": "elm.apply",
+        "label": "Apply for Leave",
+        "icon": "Leaf",
+        "to": "/elm/apply",
+        "required_permission": "modules.elm.application.create",
+        "sort_order": 10,
+    },
+    {
+        "code": "elm.balances",
+        "label": "Leave Balances",
+        "icon": "Scale",
+        "to": "/elm/balances",
+        "required_permission": "modules.elm.balance.view",
+        "sort_order": 20,
+    },
+    {
+        "code": "elm.history",
+        "label": "Leave History",
+        "icon": "History",
+        "to": "/elm/history",
+        "required_permission": "modules.elm.history.view",
+        "sort_order": 30,
+    },
+    {
+        "code": "elm.print",
+        "label": "Print Application",
+        "icon": "Printer",
+        "to": "/elm/print",
+        "required_permission": "modules.elm.application.print",
+        "sort_order": 40,
+    },
+    {
+        "code": "elm.approvals",
+        "label": "Leave Approvals",
+        "icon": "ClipboardCheck",
+        "to": "/elm/approvals",
+        "required_permission": "modules.elm.workflow.review",
+        "sort_order": 50,
+    },
+    {
+        "code": "elm.routing",
+        "label": "Approval Routing",
+        "icon": "Settings",
+        "to": "/elm/routing",
+        "required_permission": "modules.elm.workflow.configure",
+        "sort_order": 60,
+    },
+    {
+        "code": "elm.sla",
+        "label": "SLA Thresholds",
+        "icon": "Clock",
+        "to": "/elm/sla/thresholds",
+        "required_permission": "modules.elm.sla.configure_thresholds",
+        "sort_order": 90,
+    },
+    {
+        "code": "elm.year_end",
+        "label": "Year-End Processing",
+        "icon": "Calendar",
+        "to": "/elm/year-end",
+        "required_permission": "modules.elm.yearend.execute",
+        "sort_order": 100,
+    },
+]
 
 #: Permissions this module recognises
 PERMISSIONS = [
-    ("elm.leave.application.create", "Create a new leave application"),
-    ("elm.leave.application.view", "View own leave applications"),
-    ("elm.leave.application.view_any", "View any leave application"),
-    ("elm.leave.balance.view", "View own leave balances"),
-    ("elm.leave.balance.manage", "Manage leave balances (admin)"),
-    ("elm.leave.histroy.view", "View own leave history"),
-    ("elm.leave.withdraw", "Withdraw a pending leave request"),
-    ("elm.leave.cancel-request", "Request cancellation of approved leave"),
-    ("elm.leave.extension-request", "Request extension of ongoing leave"),
-    ("elm.leave.resumption.submit", "Submit resumption of duty"),
-    ("elm.leave.resumption.review", "Review resumption of duty"),
-    ("elm.leave.print", "Obtain printable/exportable leave application"),
-    ("elm.policy.config", "Configure leave policy parameters"),
-    ("elm.holiday.calendar", "Maintain and publish holiday/RH calendar"),
-    ("elm.offline.sync", "Record already-sanctioned offline leave"),
-    ("elm.records.maintain", "Maintain authorized leave records"),
-    ("elm.sla.thresholds.configure", "Configure SLA reminder/escalation thresholds"),
-    ("elm.substitute.nominate", "Nominate a substitute for responsibility coverage"),
-    ("elm.substitute.replace", "Nominate a replacement substitute after decline"),
-    ("elm.yearend.execute", "Execute year-end leave processing"),
-    ("elm.sla.process", "Process SLA threshold event"),
+    ("modules.elm.application.create", "Create a new leave application"),
+    ("modules.elm.application.view", "View own leave applications"),
+    ("modules.elm.balance.view", "View own leave balances"),
+    ("modules.elm.history.view", "View own leave history"),
+    ("modules.elm.leave.withdraw", "Withdraw a pending leave request"),
+    ("modules.elm.leave.cancel_request", "Request cancellation of approved leave"),
+    ("modules.elm.leave.extension_request", "Request extension of ongoing leave"),
+    ("modules.elm.resumption.submit", "Submit resumption of duty"),
+    ("modules.elm.resumption.review", "Review resumption of duty"),
+    ("modules.elm.workflow.review", "Review leave approval workflow items"),
+    ("modules.elm.workflow.configure", "Configure leave approval routing roles"),
+    ("modules.elm.application.print", "Obtain printable/exportable leave application"),
+    ("modules.elm.policy.configure", "Configure leave policy parameters"),
+    ("modules.elm.calendar.manage", "Maintain and publish holiday/RH calendar"),
+    ("modules.elm.offline.record", "Record already-sanctioned offline leave"),
+    ("modules.elm.records.maintain", "Maintain authorized leave records"),
+    ("modules.elm.sla.configure_thresholds", "Configure SLA reminder/escalation thresholds"),
+    ("modules.elm.substitute.replace", "Nominate a replacement substitute after decline"),
+    ("modules.elm.yearend.execute", "Execute year-end leave processing"),
+    ("modules.elm.sla.process", "Process SLA threshold event"),
 ]
 
 SYSTEM_PERMISSIONS = [
-    "elm.yearend.execute",  # May be restricted to specific roles
-    "elm.sla.process",      # Configurable threshold processing
+    "modules.elm.sla.process",  # Event-triggered SLA handler
+    "modules.elm.yearend.execute",
 ]
 
 
@@ -44,25 +118,65 @@ SYSTEM_PERMISSIONS = [
 ROLE_GRANTS = {
     # Example grants - actual designation names would come from the institute's
     # designation configuration
-    "faculty": ["elm.leave.application.view", "elm.leave.balance.view",
-                "elm.leave.print", "elm.holiday.calendar"],
-    "staff": ["elm.leave.application.create", "elm.leave.application.view",
-              "elm.leave.balance.view", "elm.leave.withdraw",
-              "elm.leave.print"],
-    "unit_head": ["elm.leave.application.view", "elm.leave.balance.view",
-                  "elm.leave.histroy.view", "elm.policy.config",
-                  "elm.offline.sync", "elm.records.maintain"],
-    "leave_administrator": ["elm.leave.balance.manage", "elm.policy.config",
-                            "elm.holiday.calendar", "elm.offline.sync",
-                            "elm.records.maintain", "elm.yearend.execute",
-                            "elm.sla.thresholds.configure"],
-    "deputy_registrar": ["elm.leave.application.view", "elm.leave.balance.view",
-                         "elm.leave.histroy.view", "elm.policy.config",
-                         "elm.offline.sync", "elm.records.maintain",
-                         "elm.yearend.execute", "elm.sla.process"],
-    "director": ["elm.leave.application.view", "elm.leave.balance.view",
-                 "elm.leave.histroy.view", "elm.yearend.execute",
-                 "elm.sla.process"],
+    "faculty": [
+        "modules.elm.application.create",
+        "modules.elm.application.view",
+        "modules.elm.balance.view",
+        "modules.elm.history.view",
+        "modules.elm.leave.withdraw",
+        "modules.elm.leave.cancel_request",
+        "modules.elm.leave.extension_request",
+        "modules.elm.resumption.submit",
+        "modules.elm.application.print",
+        "modules.elm.substitute.replace",
+    ],
+    "staff": [
+        "modules.elm.application.create",
+        "modules.elm.application.view",
+        "modules.elm.balance.view",
+        "modules.elm.history.view",
+        "modules.elm.leave.withdraw",
+        "modules.elm.leave.cancel_request",
+        "modules.elm.leave.extension_request",
+        "modules.elm.resumption.submit",
+        "modules.elm.application.print",
+        "modules.elm.substitute.replace",
+    ],
+    "unit_head": [
+        "modules.elm.resumption.review",
+        "modules.elm.application.view",
+        "modules.elm.balance.view",
+        "modules.elm.history.view",
+        "modules.elm.workflow.review",
+        "modules.elm.policy.configure",
+        "modules.elm.offline.record",
+        "modules.elm.records.maintain",
+    ],
+    "leave_administrator": [
+        "modules.elm.workflow.configure",
+        "modules.elm.policy.configure",
+        "modules.elm.calendar.manage",
+        "modules.elm.offline.record",
+        "modules.elm.records.maintain",
+        "modules.elm.sla.configure_thresholds",
+    ],
+    "deputy_registrar": [
+        "modules.elm.workflow.review",
+        "modules.elm.resumption.review",
+        "modules.elm.application.view",
+        "modules.elm.balance.view",
+        "modules.elm.history.view",
+        "modules.elm.policy.configure",
+        "modules.elm.offline.record",
+        "modules.elm.records.maintain",
+    ],
+    "director": [
+        "modules.elm.workflow.review",
+        "modules.elm.resumption.review",
+        "modules.elm.application.view",
+        "modules.elm.balance.view",
+        "modules.elm.history.view",
+    ],
 }
 
 
@@ -85,7 +199,7 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
             label="Apply for Leave",
             icon="FaLeaf",
             to="/elm/apply",
-            required_permission="elm.leave.application.create",
+            required_permission="modules.elm.application.create",
             sort_order=10,
         ),
         # View own balances
@@ -94,7 +208,7 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
             label="Leave Balances",
             icon="FaBalanceScale",
             to="/elm/balances",
-            required_permission="elm.leave.balance.view",
+            required_permission="modules.elm.balance.view",
             sort_order=20,
         ),
         # View history
@@ -103,7 +217,7 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
             label="Leave History",
             icon="FaHistory",
             to="/elm/history",
-            required_permission="elm.leave.histroy.view",
+            required_permission="modules.elm.history.view",
             sort_order=30,
         ),
         # Printable export
@@ -112,8 +226,24 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
             label="Print Application",
             icon="FaPrint",
             to="/elm/print",
-            required_permission="elm.leave.print",
+            required_permission="modules.elm.application.print",
             sort_order=40,
+        ),
+        NavItem(
+            code="elm_approvals",
+            label="Leave Approvals",
+            icon="FaClipboardCheck",
+            to="/elm/approvals",
+            required_permission="modules.elm.workflow.review",
+            sort_order=50,
+        ),
+        NavItem(
+            code="elm_routing",
+            label="Approval Routing",
+            icon="FaCogs",
+            to="/elm/routing",
+            required_permission="modules.elm.workflow.configure",
+            sort_order=60,
         ),
         # SLA configuration (admin only)
         NavItem(
@@ -121,7 +251,7 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
             label="SLA Thresholds",
             icon="FaClock",
             to="/elm/sla/thresholds",
-            required_permission="elm.sla.thresholds.configure",
+            required_permission="modules.elm.sla.configure_thresholds",
             sort_order=90,
         ),
     ]
@@ -134,13 +264,14 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
 
     # Add ELM module entry if granted
     if granted and "modules.elm" in granted:
-        entry = {"code": "modules.elm", "label": "Employee Leave Management",
-                 "icon": "FaUserInjured"}
+        entry = {
+            "code": "modules.elm",
+            "label": "Employee Leave Management",
+            "icon": "FaUserInjured",
+        }
         # Check if we need links or just a section header
         has_links = any(
-            item.required_permission in perms
-            for item in elm_nav_items
-            if item.required_permission
+            item.required_permission in perms for item in elm_nav_items if item.required_permission
         )
         if has_links:
             entry["links"] = [
@@ -157,7 +288,6 @@ def build_navigation(*, granted_module_codes=None, permissions=None):
 
 def active_module_codes():
     """Return codes of active ELM module entries in the database."""
-    from modules.accesscontrol.models import Module
-    return list(Module.objects.filter(
-        code="modules.elm", status="active"
-    ).values_list("code", flat=True))
+    return list(
+        Module.objects.filter(code="modules.elm", status="active").values_list("code", flat=True)
+    )

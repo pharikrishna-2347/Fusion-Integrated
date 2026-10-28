@@ -5,20 +5,23 @@ All functions follow the business rules (BR-EL-*) and use case requirements
 (CFR-EL-*) from the v1.4 synchronized baseline.
 """
 
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal
-from collections import defaultdict
+
+from django.db import transaction
+from django.utils import timezone
 
 from modules.elm.models import (
-    LeaveCategory, LeaveApplication, LeaveBalance,
-    SubstituteNomination,
+    LeaveApplication,
+    LeaveBalance,
+    LeaveCategory,
+    YearEndProcessingRun,
 )
-from core.db.mixins import TimeStampedModel
-
 
 # ============================================================================
 # Leave Validation Service
 # ============================================================================
+
 
 class LeaveValidationService:
     """Validate leave applications per BR-EL-001 through BR-EL-031."""
@@ -38,6 +41,13 @@ class LeaveValidationService:
             errors.append(f"Unsupported leave category: {category.code}")
             return {"valid": False, "error": "; ".join(errors)}
 
+        # BR-EL-010: Half-day treatment is limited to a single-date CL request.
+        if application.day_part != LeaveApplication.DayPartChoices.FULL_DAY:
+            if category.code != "CL" or not category.supports_half_day:
+                errors.append("Half-day requests are only supported for Casual Leave.")
+            elif application.requested_start != application.requested_end:
+                errors.append("A half-day CL request must cover exactly one date.")
+
         # BR-EL-013: Station Leave coupling — already handled at application level
 
         # BR-EL-011: Substitute eligibility checks
@@ -47,16 +57,14 @@ class LeaveValidationService:
 
         # BR-EL-003: Validate category eligibility, entitlement/balance,
         # counting/calendar conditions, and impermissible overlap
-        validation = LeaveValidationService._validate_eligibility_and_balance(
-            application
-        )
-        if not validation['valid']:
-            errors.append(validation['error'])
+        validation = LeaveValidationService._validate_eligibility_and_balance(application)
+        if not validation["valid"]:
+            errors.append(validation["error"])
 
         # BR-EL-012: Applicant non-overlap with half-day CL exception
         overlap_validation = LeaveValidationService._validate_no_overlap(application)
-        if not overlap_validation['valid']:
-            errors.append(overlap_validation['error'])
+        if not overlap_validation["valid"]:
+            errors.append(overlap_validation["error"])
 
         if errors:
             return {"valid": False, "error": "; ".join(errors)}
@@ -64,10 +72,88 @@ class LeaveValidationService:
         return {"valid": True, "error": None}
 
     @staticmethod
+    def validate_extension_application(application):
+        """Validate an extension against its ongoing approved base leave."""
+        original = application.extension_of
+        if original is None:
+            return {"valid": False, "error": "The original approved leave is required."}
+        today = date.today()
+        if (
+            original.employee_user_id != application.employee_user_id
+            or original.status != LeaveApplication.StatusChoices.APPROVED
+            or original.leave_category.code not in {"EL", "COL", "VL"}
+            or not original.requested_start <= today <= original.requested_end
+        ):
+            return {
+                "valid": False,
+                "error": "An extension requires the applicant's ongoing approved EL, COL, or VL.",
+            }
+        if (
+            application.leave_category_id != original.leave_category_id
+            or application.requested_start <= original.requested_end
+            or application.requested_start > application.requested_end
+        ):
+            return {
+                "valid": False,
+                "error": (
+                    "The extension period must follow the original leave and use its category."
+                ),
+            }
+
+        balance_result = LeaveValidationService._validate_eligibility_and_balance(application)
+        if not balance_result["valid"]:
+            return balance_result
+        overlap_result = LeaveValidationService._validate_no_overlap(application)
+        if not overlap_result["valid"]:
+            return overlap_result
+        return {"valid": True, "error": None}
+
+    @staticmethod
+    def count_requested_days(application):
+        """Count days charged for a valid request, including half-day CL."""
+        if application.day_part in {
+            LeaveApplication.DayPartChoices.FIRST_HALF,
+            LeaveApplication.DayPartChoices.SECOND_HALF,
+        }:
+            return Decimal("0.5")
+        inclusive_days = (application.requested_end - application.requested_start).days + 1
+        if application.leave_category.continuous_day_counting:
+            return Decimal(inclusive_days)
+        weekdays = sum(
+            1
+            for day_offset in range(inclusive_days)
+            if (application.requested_start + timedelta(days=day_offset)).weekday() < 5
+        )
+        return Decimal(weekdays)
+
+    @staticmethod
     def _validate_eligibility_and_balance(application):
         """Validate leave-category eligibility and available entitlement/balance."""
         category = application.leave_category
         user_id = application.employee_user_id
+
+        # Confirm the applicant is an active payroll employee and that the leave
+        # category applies to their faculty/staff classification.
+        from modules.directory.contracts import get_users
+
+        employee = get_users([user_id]).get(user_id)
+        if employee is None or employee.kind not in {"faculty", "staff"}:
+            return {
+                "valid": False,
+                "error": "The applicant is not an active Faculty or Staff employee.",
+            }
+        employee_type = "F" if employee.kind == "faculty" else "S"
+        if category.applicable_to not in {"B", employee_type}:
+            return {
+                "valid": False,
+                "error": f"{category.code} is not applicable to this employee category.",
+            }
+
+        if application.requested_start > application.requested_end:
+            return {
+                "valid": False,
+                "error": "The leave end date must be on or after the start date.",
+            }
 
         # Get or create balance for this category/year
         year = date.today().year
@@ -75,10 +161,27 @@ class LeaveValidationService:
             user_id=user_id,
             leave_category=category,
             year=year,
+            defaults={
+                "entitlement_per_year": category.annual_entitlement or Decimal("0"),
+            },
         )
 
-        # Check entitlement/balance per BR-EL-002...009
+        # Check entitlement/balance per BR-EL-002...010.
         available = balance.available()
+        requested_days = LeaveValidationService.count_requested_days(application)
+        if requested_days <= 0:
+            return {
+                "valid": False,
+                "error": "The requested period contains no chargeable leave days.",
+            }
+        if available < requested_days:
+            return {
+                "valid": False,
+                "error": (
+                    f"Insufficient {category.code} balance: {available:.1f} days "
+                    f"available; {requested_days:.1f} days requested."
+                ),
+            }
 
         # Category-specific entitlement checks
         if category.code == "CL":
@@ -86,7 +189,10 @@ class LeaveValidationService:
             if available < 1:  # Need at least 1 full day or 2 half-days
                 return {
                     "valid": False,
-                    "error": f"Insufficient CL balance: {available:.1f} days available (entitlement: {balance.entitlement_per_year})",
+                    "error": (
+                        f"Insufficient CL balance: {available:.1f} days available "
+                        f"(entitlement: {balance.entitlement_per_year})"
+                    ),
                 }
         elif category.code == "RH":
             # BR-EL-003: 2 days/year, must be applicable RH, unused lapses
@@ -147,7 +253,6 @@ class LeaveValidationService:
         active pending or approved leave. First-half and second-half CL on the
         same date are non-overlapping when they occupy different halves.
         """
-        from modules.elm.models import LeaveApplication
 
         user_id = application.employee_user_id
         new_start = application.requested_start
@@ -177,28 +282,29 @@ class LeaveValidationService:
                 # No overlap
                 continue
 
-            # There is date overlap - check category-specific rules
-            # BR-EL-012: First-half/second-half CL exception
-            if new_category == "CL" and existing_category == "CL":
-                # Half-day CL exception: if they occupy different halves on same date,
-                # they are NOT overlapping
-                # Both are full-day CL requests on the same date - they overlap
-                # For now, treat as overlap unless we can parse half-day info
-                pass
-            elif existing_category == "CL" and new_category == "CL":
-                # Same - two CL requests
-                pass
+            # BR-EL-012: first-half and second-half CL on one date are distinct.
+            same_single_date = new_start == new_end == existing_start == existing_end
+            is_half_day_pair = (
+                new_category == existing_category == "CL"
+                and same_single_date
+                and application.day_part
+                in {
+                    LeaveApplication.DayPartChoices.FIRST_HALF,
+                    LeaveApplication.DayPartChoices.SECOND_HALF,
+                }
+                and existing.day_part
+                in {
+                    LeaveApplication.DayPartChoices.FIRST_HALF,
+                    LeaveApplication.DayPartChoices.SECOND_HALF,
+                }
+            )
+            if is_half_day_pair and application.day_part != existing.day_part:
+                continue
 
-            # For CL/SCL/RH: the continuous-day rule does not apply,
-            # but overlap still matters
-            # For EL/COL/VL: continuous-day rule applies, but overlap still matters
-
-            # Generic: if there's an overlap and it's not the CL half-day exception,
-            # block it
             return {
                 "valid": False,
                 "error": f"Impermissible overlap with existing {existing_category} leave "
-                         f"(existing: {existing_start} to {existing_end})",
+                f"(existing: {existing_start} to {existing_end})",
             }
 
         return {"valid": True, "error": None}
@@ -208,172 +314,105 @@ class LeaveValidationService:
 # Year-End Processing Service
 # ============================================================================
 
+
 class YearEndProcessingService:
-    """Execute year-end leave-account outcomes per EL-UC-020 and BR-EL-002-009."""
+    """Apply year-end leave outcomes once and record the resulting transactions."""
 
     @staticmethod
-    def execute_year_end():
-        """Apply defined category outcomes at year-end boundary.
+    @transaction.atomic
+    def execute_year_end(year=None):
+        year = year or date.today().year
+        run, _ = YearEndProcessingRun.objects.select_for_update().get_or_create(year=year)
+        if run.completed_at is not None:
+            return run.result
 
-        Per BR-EL-002: CL lapses unused
-        Per BR-EL-003: RH lapses unused
-        Per BR-EL-004: SCL lapses unused
-        Per BR-EL-007: Non-faculty EL carries forward
-        Per BR-EL-008: Faculty VL converts to EL at 2:1 ratio
-        Per BR-EL-009: COL carries forward
-        Per BR-EL-010: Continuous-day counting for EL/COL/VL
-        """
-        from modules.elm.models import LeaveBalance, LeaveCategory
-
-        year = date.today().year
-        categories = LeaveCategory.objects.all()
         transactions = []
-        exceptions = []
+        categories = list(LeaveCategory.objects.all())
 
-        for cat in categories:
-            # Get all employee balances for this category
-            balances = LeaveBalance.objects.filter(
-                leave_category=cat,
+        for category in categories:
+            balances = LeaveBalance.objects.select_for_update().filter(
+                leave_category=category,
                 year=year,
             )
-
             for balance in balances:
-                user_id = balance.user_id
-                available = balance.available()
+                unused = max(balance.available(), Decimal("0"))
+                if unused == 0:
+                    continue
 
-                if cat.code == "CL":
-                    # BR-EL-002: Unused CL lapses at year end without carry-forward
-                    # All unused days are lost
-                    lapsed = available
-                    if lapsed > 0:
-                        # Record transaction
-                        balance.used_per_year += lapsed
-                        balance.carried_forward_from_previous = Decimal('0')
-                        balance.save(update_fields=["used_per_year", "carried_forward_from_previous"])
-                        transactions.append({
-                            "user_id": user_id,
-                            "category": cat.code,
+                if category.code in {"CL", "RH", "SCL"}:
+                    transactions.append(
+                        {
+                            "user_id": balance.user_id,
+                            "category": category.code,
                             "action": "lapse",
-                            "days": float(lapsed),
-                        })
+                            "days": float(unused),
+                        }
+                    )
+                    continue
 
-                elif cat.code == "RH":
-                    # BR-EL-003: Unused RH lapses at year end
-                    lapsed = available
-                    if lapsed > 0:
-                        balance.used_per_year += lapsed
-                        balance.carried_forward_from_previous = Decimal('0')
-                        balance.save(update_fields=["used_per_year", "carried_forward_from_previous"])
-                        transactions.append({
-                            "user_id": user_id,
-                            "category": cat.code,
-                            "action": "lapse",
-                            "days": float(lapsed),
-                        })
-
-                elif cat.code == "SCL":
-                    # BR-EL-004: Unused SCL lapses at year end
-                    lapsed = available
-                    if lapsed > 0:
-                        balance.used_per_year += lapsed
-                        balance.carried_forward_from_previous = Decimal('0')
-                        balance.save(update_fields=["used_per_year", "carried_forward_from_previous"])
-                        transactions.append({
-                            "user_id": user_id,
-                            "category": cat.code,
-                            "action": "lapse",
-                            "days": float(lapsed),
-                        })
-
-                elif cat.code == "EL":
-                    # BR-EL-005: Non-faculty EL carries forward according to policy
-                    # BR-EL-007: Unused EL carries forward
-                    # The carry-forward amount depends on policy
-                    # For this baseline, carry forward all unused EL
-                    unused = available
-                    if unused > 0:
-                        balance.carried_forward_from_previous += unused
-                        # Reset used_per_year - the carried forward is from previous years
-                        # The current year's entitlement is still 30 days
-                        balance.save(update_fields=["carried_forward_from_previous"])
-                        transactions.append({
-                            "user_id": user_id,
-                            "category": cat.code,
+                if category.code in {"EL", "COL"}:
+                    next_balance, _ = LeaveBalance.objects.select_for_update().get_or_create(
+                        user_id=balance.user_id,
+                        leave_category=category,
+                        year=year + 1,
+                        defaults={
+                            "entitlement_per_year": balance.entitlement_per_year,
+                        },
+                    )
+                    next_balance.carried_forward_from_previous += unused
+                    next_balance.save(update_fields=["carried_forward_from_previous"])
+                    transactions.append(
+                        {
+                            "user_id": balance.user_id,
+                            "category": category.code,
                             "action": "carry_forward",
                             "days": float(unused),
-                        })
+                        }
+                    )
+                    continue
 
-                elif cat.code == "VL":
-                    # BR-EL-008: Faculty VL-to-EL conversion at year end
-                    # 2 VL : 1 EL including fractional conversion
-                    # VL itself does not carry forward
-                    # Convert all unused faculty VL to EL at 2:1 ratio
-                    # Check if faculty - in real implementation, would check employee type
-                    # For this baseline, assume faculty conversion applies
-                    unused_vl = available
-                    if unused_vl > 0:
-                        # Convert at 2:1 ratio, preserving fractions
-                        converted_el = unused_vl / Decimal('2')
-                        # Credit converted EL to employee's EL balance
-                        # Find or create EL balance for this employee
-                        el_balance, created = LeaveBalance.objects.get_or_create(
-                            user_id=user_id,
-                            leave_category__code="EL",
-                            year=year,
-                        )
-                        el_balance.entitlement_per_year = (
-                            el_balance.entitlement_per_year + converted_el
-                        )
-                        el_balance.save(update_fields=["entitlement_per_year"])
-
-                        # VL carry-forward is zero after conversion per BR-EL-008.6
-                        balance.used_per_year += unused_vl
-                        balance.carried_forward_from_previous = Decimal('0')
-                        balance.save(update_fields=["used_per_year", "carried_forward_from_previous"])
-
-                        transactions.append({
-                            "user_id": user_id,
-                            "category": cat.code,
+                if category.code == "VL":
+                    el_category = LeaveCategory.objects.filter(code="EL").first()
+                    if el_category is None:
+                        continue
+                    converted = unused / Decimal("2")
+                    next_el_balance, _ = LeaveBalance.objects.select_for_update().get_or_create(
+                        user_id=balance.user_id,
+                        leave_category=el_category,
+                        year=year + 1,
+                        defaults={"entitlement_per_year": Decimal("0")},
+                    )
+                    next_el_balance.carried_forward_from_previous += converted
+                    next_el_balance.save(update_fields=["carried_forward_from_previous"])
+                    transactions.append(
+                        {
+                            "user_id": balance.user_id,
+                            "category": category.code,
                             "action": "vl_to_el_conversion",
-                            "unused_vl": float(unused_vl),
-                            "converted_el": float(converted_el),
-                        })
+                            "unused_vl": float(unused),
+                            "converted_el": float(converted),
+                        }
+                    )
 
-                    # BR-EL-008.7: Converted EL may carry forward and be subsequently used
-                    # The converted EL is already in the EL balance above, which
-                    # carries forward per BR-EL-007 logic
-
-                elif cat.code == "COL":
-                    # BR-EL-009: Unused COL carries forward according to policy
-                    # BR-EL-031: COL is medical/balance-controlled
-                    unused = available
-                    if unused > 0:
-                        balance.carried_forward_from_previous += unused
-                        balance.save(update_fields=["carried_forward_from_previous"])
-                        transactions.append({
-                            "user_id": user_id,
-                            "category": cat.code,
-                            "action": "carry_forward",
-                            "days": float(unused),
-                        })
-
-        # Build result summary
         result = {
             "year": year,
             "transactions": transactions,
-            "exceptions": exceptions,
+            "exceptions": [],
             "summary": {
                 "total_transactions": len(transactions),
                 "categories_processed": len(categories),
             },
         }
-
+        run.result = result
+        run.completed_at = timezone.now()
+        run.save(update_fields=["result", "completed_at"])
         return result
 
 
 # ============================================================================
 # SLA Threshold Trigger Service
 # ============================================================================
+
 
 class SLATriggerService:
     """Process SLA reminder and escalation threshold events per EL-UC-021 and BR-EL-032-033."""
@@ -401,11 +440,9 @@ class SLATriggerService:
         # 4. At escalation threshold: if still pending, notify/escalate to higher authority + log
         # 5. If task is no longer pending: issue no reminder/escalation
 
-        result = {
+        return {
             "reminders_issued": 0,
             "escalations_issued": 0,
             "tasks_checked": 0,
             "tasks_no_longer_pending": 0,
         }
-
-        return result

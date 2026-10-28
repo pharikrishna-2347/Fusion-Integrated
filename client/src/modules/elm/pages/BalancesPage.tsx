@@ -1,150 +1,120 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
-  Alert, Badge, Card, Container, Group, Loading, Table, TableRow, TableCell,
-  TableHead, Text, Tab, Tabs, FaRedo, FaRedoAlt, FaUndo, FaInfoCircle,
+  Alert, Badge, Card, Container, Table, Tabs, Text,
 } from "@mantine/core";
-import { useLeaveBalances, useLeaveHistory } from "../api/hooks";
-import { useNavigate } from "react-router-dom";
-import type { LeaveBalance, LeaveHistoryEntry } from "../api/types";
 
-/** EL-UC-012: View Leave Balances and History — Inspect own current leave balances
- *  and leave-account/request history including request status and final decisions. */
+import { ErrorState } from "../../../ui/components/ErrorState";
+import { PageHeader } from "../../../ui/components/PageHeader";
+import { useLeaveBalances, useLeaveHistory } from "../api/hooks";
+
 export default function BalancesPage() {
-  const navigate = useNavigate();
+  const [tab, setTab] = useState<string | null>("balances");
   const balancesQuery = useLeaveBalances();
   const historyQuery = useLeaveHistory();
+
+  if (balancesQuery.error) {
+    return <Container size="lg"><ErrorState error={balancesQuery.error} /></Container>;
+  }
 
   const balances = balancesQuery.data?.balances ?? [];
   const history = historyQuery.data ?? [];
 
-  if (balancesQuery.error) {
-    return (
-      <Container size="md">
-        <ErrorState error={balancesQuery.error} />
-      </Container>
-    );
-  }
-
-  // Tab view: Balances vs History
-  const [tab, setTab] = useState<"balances" | "history">("balances");
-
   return (
-    <Container size="md">
+    <Container size="lg">
       <PageHeader title="Leave Balances and History" />
+      <Tabs value={tab} onChange={setTab}>
+        <Tabs.List>
+          <Tabs.Tab value="balances">Balances</Tabs.Tab>
+          <Tabs.Tab value="history">History</Tabs.Tab>
+        </Tabs.List>
 
-      <Tabs
-        variant="filled"
-        orientation="horizontal"
-        value={tab}
-        onChange={setTab}
-      >
-        <Tab value="balances">Leave Balances</Tab>
-        <Tab value="history">Leave History</Tab>
+        <Tabs.Panel value="balances" pt="md">
+          {balances.length === 0 ? (
+            <Alert color="gray">No leave balances are available for your account.</Alert>
+          ) : (
+            <Card withBorder>
+              <Table.ScrollContainer minWidth={640}>
+                <Table striped highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Category</Table.Th>
+                      <Table.Th>Entitlement</Table.Th>
+                      <Table.Th>Used</Table.Th>
+                      <Table.Th>Carry forward</Table.Th>
+                      <Table.Th>Available</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {balances.map((balance) => (
+                      <Table.Tr key={balance.leave_category_code}>
+                        <Table.Td>{balance.category_label}</Table.Td>
+                        <Table.Td>{balance.entitlement_per_year}</Table.Td>
+                        <Table.Td>{balance.used_per_year}</Table.Td>
+                        <Table.Td>{balance.carried_forward_from_previous}</Table.Td>
+                        <Table.Td>
+                          <Badge color={balance.available_days > 0 ? "green" : "gray"}>
+                            {balance.available_days}
+                          </Badge>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Card>
+          )}
+        </Tabs.Panel>
+
+        <Tabs.Panel value="history" pt="md">
+          {historyQuery.error ? (
+            <ErrorState error={historyQuery.error} />
+          ) : history.length === 0 ? (
+            <Alert color="gray">No leave history is available.</Alert>
+          ) : (
+            <Card withBorder>
+              <Table.ScrollContainer minWidth={720}>
+                <Table striped highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Type</Table.Th>
+                      <Table.Th>Category</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                      <Table.Th>Period</Table.Th>
+                      <Table.Th>Decision</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {history.map((entry, index) => (
+                      <Table.Tr key={entry.pk ?? "balance-" + index}>
+                        <Table.Td>
+                          {entry.type === "balance" ? "Balance snapshot" : "Application"}
+                        </Table.Td>
+                        <Table.Td>{entry.leave_category_code}</Table.Td>
+                        <Table.Td>{entry.status ?? "—"}</Table.Td>
+                        <Table.Td>
+                          {entry.type === "balance"
+                            ? "Year " + (entry.year ?? "—")
+                            : entry.requested_start
+                              ? entry.requested_start + " – " + (entry.requested_end ?? "")
+                              : "—"}
+                        </Table.Td>
+                        <Table.Td>
+                          {entry.type === "balance"
+                            ? "—"
+                            : entry.final_decision ? entry.status : "Pending"}
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              </Table.ScrollContainer>
+            </Card>
+          )}
+        </Tabs.Panel>
       </Tabs>
-
-      {/* Balances Tab */}
-      {tab === "balances" && balances.length > 0 && (
-        <Card padding="lg" mb="md">
-          <Text fw={600} mb="xs">Current Leave Balances</Text>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell category>Category</TableCell>
-                <TableCell entitlement>Entitlement/yr</TableCell>
-                <TableCell used>Used (yr)</TableCell>
-                <TableCell carry>Carried Forward</TableCell>
-                <TableCell available>Available</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {balances.map((bal) => (
-                <TableRow key={bal.leave_category_code}>
-                  <TableCell>{bal.category_label}</TableCell>
-                  <TableCell>{bal.entitlement_per_year}</TableCell>
-                  <TableCell>{bal.used_per_year}</TableCell>
-                  <TableCell>{bal.carried_forward_from_previous}</TableCell>
-                  <TableCell>
-                    <Badge color={bal.available_days > 0 ? "green" : "red"}>
-                      {bal.available_days}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
-
-      {tab === "balances" && balances.length === 0 && (
-        <Alert variant="light" color="gray" icon={<FaInfoCircle />}>
-          No leave balances found for your employee profile.
-        </Alert>
-      )}
-
-      {/* History Tab */}
-      {tab === "history" && history.length > 0 && (
-        <Card padding="lg" mb="md">
-          <Text fw={600} mb="xs">Leave History</Text>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell type>Type</TableCell>
-                <TableCell category>Category</TableCell>
-                <TableCell status>Status</TableCell>
-                <TableCell period>Period</TableCell>
-                <TableCell date>Date</TableCell>
-                <TableCell decision>Decision</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {history.map((entry) => (
-                <TableRow key={entry.pk}>
-                  <TableCell>{entry.type}</TableCell>
-                  <TableCell>{entry.leave_category_code}</TableCell>
-                  <TableCell>
-                    <Badge
-                      color={
-                        entry.status === "approved" ? "green"
-                        : entry.status === "rejected" ? "red"
-                        : entry.status === "withdrawn" ? "orange"
-                        : "blue"
-                      }
-                    >
-                      {entry.status || "—"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {entry.requested_start} - {entry.requested_end}
-                  </TableCell>
-                  <TableCell>{entry.submitted_at ? new Date(entry.submitted_at).toLocaleDateString() : "—"}</TableCell>
-                  <TableCell>
-                    {entry.decision || "Pending"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
-      )}
-
-      {tab === "history" && history.length === 0 && (
-        <Alert variant="light" color="gray" icon={<FaInfoCircle />}>
-          No leave history found.
-        </Alert>
-      )}
+      <Text size="xs" c="dimmed" mt="sm">
+        Balance totals reflect posted leave-account transactions.
+      </Text>
     </Container>
   );
 }
-
-/** Placeholder ErrorState component */
-function ErrorState({ error }: { error: any }) {
-  return (
-    <Card padding="lg" color="red">
-      <Text fw={600} mb="xs">Error</Text>
-      <Text c="red">{error?.message || error || "Unknown error"}</Text>
-    </Card>
-  );
-}
-
-/** Placeholder TableBody - using Mantine Table */
-const TableBody = ({ children }: { children: any }) => <>{children}</>;

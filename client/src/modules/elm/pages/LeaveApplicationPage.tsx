@@ -1,297 +1,188 @@
-import { useState, useEffect } from "react";
+import { useState, type FormEvent } from "react";
 import {
-  Alert, Badge, Button, Card, Container, Group, Loading, Select, Text, Textarea,
-  notifications, useForm, FormProvider, useWatch, SchemaProvider,
+  Alert, Button, Card, Checkbox, Container, Select, Stack, TextInput, Textarea,
 } from "@mantine/core";
-import { FaLeaf, FaCalendar, FaInfoCircle, FaTimesCircle } from "react-icons/fa";
-import { useLeaveCategories, useLeaveBalances, useLeaveHistory,
-         usePrintApplication, useYearEndProcessing } from "../api/hooks";
-import { useNavigate } from "react-router-dom";
-import type { LeaveCategory, LeaveBalance, LeaveHistoryEntry } from "../api/types";
+import { notifications } from "@mantine/notifications";
 
-/** EL-UC-001: Apply for Leave — Employee creates and submits a new leave application. */
+import { ErrorState } from "../../../ui/components/ErrorState";
+import { PageHeader } from "../../../ui/components/PageHeader";
+import { errorMessage } from "../../../lib/http";
+import {
+  useLeaveBalances, useLeaveCategories, useSubmitLeaveApplication,
+} from "../api/hooks";
+import type { LeaveApplicationCreateRequest } from "../api/types";
+
+const EMPTY_FORM: LeaveApplicationCreateRequest = {
+  leave_category_code: "",
+  requested_start: "",
+  requested_end: "",
+  day_part: "full_day",
+  purpose_reason: "",
+  station_leave: false,
+  station_details: "",
+};
+
 export default function LeaveApplicationPage() {
-  const navigate = useNavigate();
-
-  // Fetch leave categories from API
   const categoriesQuery = useLeaveCategories();
   const balancesQuery = useLeaveBalances();
-  const historyQuery = useLeaveHistory();
+  const submit = useSubmitLeaveApplication();
+  const [values, setValues] = useState(EMPTY_FORM);
+
+  if (categoriesQuery.error) {
+    return <Container size="md"><ErrorState error={categoriesQuery.error} /></Container>;
+  }
+  if (balancesQuery.error) {
+    return <Container size="md"><ErrorState error={balancesQuery.error} /></Container>;
+  }
 
   const categories = categoriesQuery.data ?? [];
   const balances = balancesQuery.data?.balances ?? [];
-  const history = historyQuery.data ?? [];
+  const availableCodes = new Set(
+    balances.filter((balance) => balance.available_days > 0)
+      .map((balance) => balance.leave_category_code),
+  );
+  const selectedCategory = categories.find(
+    (category) => category.code === values.leave_category_code,
+  );
+  const categoryOptions = categories
+    .filter((category) => availableCodes.has(category.code))
+    .map((category) => ({
+      value: category.code,
+      label: category.code + " — " + category.label,
+    }));
 
-  // Form state
-  const [formValues, setFormValues] = useState<LeaveApplicationCreateRequest>({
-    leave_category_code: "",
-    requested_start: "",
-    requested_end: "",
-    purpose_reason: "",
-    station_leave: false,
-    station_details: "",
-  });
-
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // Derived: available categories based on employee type (faculty/staff)
-  // and current balances
-  const eligibleCategories = categories.filter((cat) => {
-    // Check if employee has sufficient balance for the category
-    const balance = balances.find((b) => b.leave_category_code === cat.code);
-    if (!balance) return false;
-    // For now, allow if balance is available (could be 0 for new entitlements)
-    return balance.available_days >= 0;
-  });
-
-  // Handle form submission
-  const onSubmit = async (values: LeaveApplicationCreateRequest) => {
-    setIsSubmitting(true);
-    try {
-      const response = await fetch("/api/v1/elm/apply", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(values),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || "Failed to submit leave application");
-      }
-
-      const result: LeaveApplicationCreateResponse = await response.json();
-      notifications.show({
-        color: "green",
-        title: "Leave application submitted",
-        message: `Your ${result.message} has been submitted successfully.`,
-      });
-
-      // Reset form
-      setFormValues({
-        leave_category_code: "",
-        requested_start: "",
-        requested_end: "",
-        purpose_reason: "",
-        station_leave: false,
-        station_details: "",
-      });
-
-      navigate("/elm/balances");
-    } catch (e: any) {
-      notifications.show({
-        color: "red",
-        title: "Could not submit leave application",
-        message: e.message,
-      });
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  // Form validation helpers
-  const validate = () => {
-    const { leave_category_code, requested_start, requested_end } = formValues;
-    if (!leave_category_code) {
-      return "Please select a leave category";
-    }
-    if (!requested_start) {
-      return "Please select a start date";
-    }
-    if (!requested_end) {
-      return "Please select an end date";
-    }
-    const start = new Date(requested_start);
-    const end = new Date(requested_end);
-    if (end < start) {
-      return "End date must be after start date";
-    }
-    return null;
-  };
-
-  // UI
-  const error = validate();
-
-  if (categoriesQuery.error) {
-    return (
-      <Container size="md">
-        <ErrorState error={categoriesQuery.error} />
-      </Container>
-    );
+  function onChange<K extends keyof LeaveApplicationCreateRequest>(
+    key: K,
+    value: LeaveApplicationCreateRequest[K],
+  ) {
+    setValues((current) => ({ ...current, [key]: value }));
   }
 
-  if (!eligibleCategories.length) {
-    return (
-      <Container size="md">
-        <PageHeader title="Apply for Leave" />
-        <Alert variant="light" color="gray" icon={<FaInfoCircle />}>
-          No leave categories are currently available for your employee type.
-        </Alert>
-      </Container>
-    );
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!values.leave_category_code || !values.requested_start
+      || !values.requested_end || !values.purpose_reason.trim()) {
+      notifications.show({
+        color: "orange",
+        title: "Complete the required fields",
+        message: "Choose a leave category, dates, and a reason.",
+      });
+      return;
+    }
+    if (values.day_part !== "full_day" && values.requested_start !== values.requested_end) {
+      notifications.show({
+        color: "orange",
+        title: "Half-day CL must use one date",
+        message: "Choose the same start and end date for a half-day request.",
+      });
+      return;
+    }
+    if (values.requested_end < values.requested_start) {
+      notifications.show({
+        color: "orange",
+        title: "Check the leave period",
+        message: "The end date must be on or after the start date.",
+      });
+      return;
+    }
+
+    submit.mutate(values, {
+      onSuccess: (result) => {
+        notifications.show({
+          color: "green",
+          title: "Leave application submitted",
+          message: result.message + " was sent for Unit Head review.",
+        });
+        setValues(EMPTY_FORM);
+      },
+      onError: (error) => notifications.show({
+        color: "red",
+        title: "Could not submit the application",
+        message: errorMessage(error),
+      }),
+    });
   }
 
   return (
     <Container size="md">
-      <PageHeader title="Apply for Leave" subtitle="Submit a new leave request" />
-
-      {error && (
-        <Alert variant="light" color="red" icon={<FaTimesCircle />}>
-          <Text>{error}</Text>
+      <PageHeader
+        title="Apply for Leave"
+        subtitle="Submit one request for leave and any associated Station Leave details"
+      />
+      {categoryOptions.length === 0 ? (
+        <Alert color="gray">
+          No applicable leave category has an available balance.
         </Alert>
-      )}
-
-      <FormProvider>
-        <SchemaProvider
-          schema={({ getFieldState }) => ({
-            fields: {
-              leave_category_code: {
-                validate: {
-                  required: "Leave category is required",
-                },
-              },
-              requested_start: {
-                validate: {
-                  required: "Start date is required",
-                },
-              },
-              requested_end: {
-                validate: {
-                  required: "End date is required",
-                },
-              },
-            },
-          })}
-        >
-          <Card padding="lg">
-            <Group gap="sm">
-              {/* Leave Category Select */}
+      ) : (
+        <Card withBorder>
+          <form onSubmit={onSubmit}>
+            <Stack>
               <Select
-                label="Leave Category"
-                placeholder="Select leave category"
-                data={eligibleCategories.map((cat) => ({
-                  value: cat.code,
-                  label: `${cat.code}: ${cat.label}`,
-                }))}
-                value={formValues.leave_category_code}
-                onChange={(v) => setFormValues({ ...formValues, leave_category_code: v }) }
-                disabled={isSubmitting}
+                label="Leave category"
+                placeholder="Select a category"
+                data={categoryOptions}
+                value={values.leave_category_code || null}
+                onChange={(value) => {
+                  onChange("leave_category_code", value ?? "");
+                  if (value !== "CL") onChange("day_part", "full_day");
+                }}
+                required
               />
-
-              {/* Requested Period */}
-              <Group gap="sm">
-                <Text>Requested Period</Text>
+              {selectedCategory?.supports_half_day && (
                 <Select
-                  label="Start Date"
-                  placeholder="Select start date"
+                  label="CL day part"
                   data={[
-                    { value: "", label: "Select start date" },
-                    ...Array.from({ length: 30 }, (_, i) => {
-                      const d = new Date();
-                      d.setDate(d.getDate() + i);
-                      return { value: d.toISOString().split("T")[0], label: d.toLocaleDateString() };
-                    }),
+                    { value: "full_day", label: "Full day" },
+                    { value: "first_half", label: "First half (0.5 day)" },
+                    { value: "second_half", label: "Second half (0.5 day)" },
                   ]}
-                  value={formValues.requested_start}
-                  onChange={(v) => setFormValues({ ...formValues, requested_start: v }) }
-                  disabled={isSubmitting}
+                  value={values.day_part}
+                  onChange={(value) => {
+                    if (value) onChange("day_part", value as LeaveApplicationCreateRequest["day_part"]);
+                  }}
                 />
-                <Select
-                  label="End Date"
-                  placeholder="Select end date"
-                  data={[
-                    { value: "", label: "Select end date" },
-                    ...Array.from({ length: 30 }, (_, i) => {
-                      const d = new Date();
-                      d.setDate(d.getDate() + i);
-                      return { value: d.toISOString().split("T")[0], label: d.toLocaleDateString() };
-                    }),
-                  ]}
-                  value={formValues.requested_end}
-                  onChange={(v) => setFormValues({ ...formValues, requested_end: v }) }
-                  disabled={isSubmitting}
-                />
-              </Group>
-
-              {/* Purpose/Reason */}
-              <Group gap="sm">
+              )}
+              <TextInput
+                type="date"
+                label="Start date"
+                value={values.requested_start}
+                onChange={(event) => onChange("requested_start", event.currentTarget.value)}
+                required
+              />
+              <TextInput
+                type="date"
+                label="End date"
+                value={values.requested_end}
+                onChange={(event) => onChange("requested_end", event.currentTarget.value)}
+                required
+              />
+              <Textarea
+                label="Purpose / reason"
+                value={values.purpose_reason}
+                onChange={(event) => onChange("purpose_reason", event.currentTarget.value)}
+                minRows={3}
+                required
+              />
+              <Checkbox
+                label="I will be outside Jabalpur during this leave"
+                checked={values.station_leave}
+                onChange={(event) => onChange("station_leave", event.currentTarget.checked)}
+              />
+              {values.station_leave && (
                 <Textarea
-                  label="Purpose / Reason"
-                  placeholder="Enter purpose or reason for leave"
-                  rows={3}
-                  value={formValues.purpose_reason}
-                  onChange={(e) =>
-                    setFormValues({ ...formValues, purpose_reason: e.target.value })}
+                  label="Station Leave details"
+                  value={values.station_details ?? ""}
+                  onChange={(event) => onChange("station_details", event.currentTarget.value)}
+                  required
                 />
-              </Group>
-
-              {/* Station Leave */}
-              <Group gap="sm">
-                <Select
-                  label="Station Leave"
-                  placeholder="Will you be outside Jabalpur?"
-                  value={formValues.station_leave ? "true" : "false"}
-                  onChange={(v) =>
-                    setFormValues({
-                      ...formValues,
-                      station_leave: v === "true",
-                    })}
-                >
-                  <option value="false">No (in Jabalpur)</option>
-                  <option value="true">Yes (outside Jabalpur)</option>
-                </Select>
-
-                {formValues.station_leave && (
-                  <Textarea
-                    label="Station Details"
-                    placeholder="Details of absence outside Jabalpur"
-                    rows={2}
-                    value={formValues.station_details || ""}
-                    onChange={(e) =>
-                      setFormValues({
-                        ...formValues,
-                        station_details: e.target.value,
-                      })}
-                  />
-                )}
-              </Group>
-
-              {/* Action buttons */}
-              <Group gap="sm" justify="flex-end">
-                <Button
-                  variant="outline"
-                  onClick={() => notifications.show({
-                    color: "gray",
-                    title: "Cancelled",
-                    message: "Leave application was not submitted.",
-                  })}
-                  disabled={isSubmitting}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  loading={isSubmitting}
-                  type="submit"
-                  withinForm
-                >
-                  Submit Leave Application
-                </Button>
-              </Group>
-            </Group>
-          </Card>
-        </SchemaProvider>
-      </FormProvider>
+              )}
+              <Button type="submit" loading={submit.isPending}>
+                Submit application
+              </Button>
+            </Stack>
+          </form>
+        </Card>
+      )}
     </Container>
-  );
-}
-
-/** A simple ErrorState placeholder - in production this would be imported. */
-function ErrorState({ error }: { error: any }) {
-  return (
-    <Card padding="lg" color="red">
-      <Text fw={600} mb="xs">Error</Text>
-      <Text c="red">{error || "Unknown error"}</Text>
-    </Card>
   );
 }

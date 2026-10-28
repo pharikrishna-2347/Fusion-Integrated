@@ -1,98 +1,83 @@
-import { useState, useEffect } from "react";
 import {
-  Alert, Badge, Card, Container, Group, Loading, Table, TableRow, TableCell,
-  TableHead, Text, FaRedo, FaRedoAlt, FaUndo, FaInfoCircle,
+  Alert, Badge, Card, Container, Table,
 } from "@mantine/core";
-import { useLeaveHistory } from "../api/hooks";
-import { useNavigate } from "react-router-dom";
-import type { LeaveHistoryEntry } from "../api/types";
 
-/** EL-UC-012: View Leave Balances and History — detailed history view. */
+import { ErrorState } from "../../../ui/components/ErrorState";
+import { PageHeader } from "../../../ui/components/PageHeader";
+import { useLeaveHistory } from "../api/hooks";
+
 export default function HistoryPage() {
-  const navigate = useNavigate();
   const historyQuery = useLeaveHistory();
+
+  if (historyQuery.error) {
+    return <Container size="lg"><ErrorState error={historyQuery.error} /></Container>;
+  }
 
   const history = historyQuery.data ?? [];
 
-  if (historyQuery.error) {
-    return (
-      <Container size="md">
-        <ErrorState error={historyQuery.error} />
-      </Container>
-    );
-  }
-
   return (
-    <Container size="md">
-      <PageHeader title="Leave History" />
-
-      {history.length > 0 && (
-        <Card padding="lg" mb="md">
-          <Text fw={600} mb="xs">Leave Account / Request History</Text>
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>#</TableCell>
-                <TableCell category>Category</TableCell>
-                <TableCell type>Type</TableCell>
-                <TableCell status>Status</TableCell>
-                <TableCell period>Leave Period</TableCell>
-                <TableCell date>Date</TableCell>
-                <TableCell decision>Final Decision</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {history.map((entry, idx) => (
-                <TableRow key={idx}>
-                  <TableCell>{idx + 1}</TableCell>
-                  <TableCell>{entry.leave_category_code}</TableCell>
-                  <TableCell>{entry.type}</TableCell>
-                  <TableCell>
-                    <Badge
-                      color={
-                        entry.status === "approved" ? "green"
-                        : entry.status === "rejected" ? "red"
-                        : entry.status === "withdrawn" ? "orange"
-                        : "blue"
-                      }
-                    >
-                      {entry.status || "—"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {entry.requested_start} - {entry.requested_end}
-                  </TableCell>
-                  <TableCell>
-                    {entry.submitted_at ? new Date(entry.submitted_at).toLocaleDateString() : "—"}
-                  </TableCell>
-                  <TableCell>
-                    {entry.decision || "Pending / None"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+    <Container size="lg">
+      <PageHeader title="Leave History" subtitle="Requests and recorded balance snapshots" />
+      {history.length === 0 ? (
+        <Alert color="gray">No leave history is available.</Alert>
+      ) : (
+        <Card withBorder>
+          <Table.ScrollContainer minWidth={720}>
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Type</Table.Th>
+                  <Table.Th>Category</Table.Th>
+                  <Table.Th>Status</Table.Th>
+                  <Table.Th>Period</Table.Th>
+                  <Table.Th>Submitted</Table.Th>
+                  <Table.Th>Decision</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {history.map((entry, index) => (
+                  <Table.Tr key={entry.pk ?? "balance-" + index}>
+                    <Table.Td>
+                      {entry.type === "balance" ? "Balance snapshot" : "Application"}
+                    </Table.Td>
+                    <Table.Td>{entry.leave_category_code}</Table.Td>
+                    <Table.Td>
+                      {entry.status ? (
+                        <Badge
+                          color={
+                            entry.status === "approved" ? "green"
+                              : entry.status === "rejected" ? "red"
+                              : entry.status === "withdrawn" ? "orange" : "blue"
+                          }
+                        >
+                          {entry.status}
+                        </Badge>
+                      ) : "—"}
+                    </Table.Td>
+                    <Table.Td>
+                      {entry.type === "balance"
+                        ? "Year " + (entry.year ?? "—")
+                        : entry.requested_start
+                          ? entry.requested_start + " – " + (entry.requested_end ?? "")
+                          : "—"}
+                    </Table.Td>
+                    <Table.Td>
+                      {entry.submitted_at
+                        ? new Date(entry.submitted_at).toLocaleDateString()
+                        : "—"}
+                    </Table.Td>
+                    <Table.Td>
+                      {entry.type === "balance"
+                        ? "—"
+                        : entry.final_decision ? entry.status : "Pending"}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Table.ScrollContainer>
         </Card>
-      )}
-
-      {history.length === 0 && (
-        <Alert variant="light" color="gray" icon={<FaInfoCircle />}>
-          No leave history found for your employee profile.
-        </Alert>
       )}
     </Container>
   );
 }
-
-/** Placeholder ErrorState component */
-function ErrorState({ error }: { error: any }) {
-  return (
-    <Card padding="lg" color="red">
-      <Text fw={600} mb="xs">Error</Text>
-      <Text c="red">{error?.message || error || "Unknown error"}</Text>
-    </Card>
-  );
-}
-
-/** Placeholder TableBody */
-const TableBody = ({ children }: { children: any }) => <>{children</>}</>;

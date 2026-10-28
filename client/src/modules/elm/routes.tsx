@@ -9,6 +9,8 @@ const HistoryPage = lazy(() => import("./pages/HistoryPage"));
 const PrintApplicationPage = lazy(() => import("./pages/PrintApplicationPage"));
 const SLAConfigPage = lazy(() => import("./pages/SLAConfigPage"));
 const YearEndProcessingPage = lazy(() => import("./pages/YearEndProcessingPage"));
+const ApprovalQueuePage = lazy(() => import("./pages/ApprovalQueuePage"));
+const ApprovalRoutingPage = lazy(() => import("./pages/ApprovalRoutingPage"));
 
 export const routes: RouteObject[] = [
   { index: true, element: <Navigate to="apply" replace /> },
@@ -18,4 +20,6 @@ export const routes: RouteObject[] = [
   { path: "print", element: <PrintApplicationPage /> },
   { path: "sla/thresholds", element: <SLAConfigPage /> },
   { path: "year-end", element: <YearEndProcessingPage /> },
+  { path: "approvals", element: <ApprovalQueuePage /> },
+  { path: "routing", element: <ApprovalRoutingPage /> },
 ];

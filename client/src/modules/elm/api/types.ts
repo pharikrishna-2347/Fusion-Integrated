@@ -12,7 +12,7 @@ export interface LeaveCategory {
   annual_entitlement: number | null;
   carry_forward: boolean;
   continuous_day_counting: boolean;
-  applicable_to: "F" | "S";
+  applicable_to: "F" | "S" | "B";
   supports_half_day: boolean;
 }
 
@@ -33,6 +33,7 @@ export interface LeaveApplication {
   leave_category_label: string;
   requested_start: string; // ISO date string
   requested_end: string;   // ISO date string
+  day_part: "full_day" | "first_half" | "second_half";
   purpose_reason: string;
   station_leave: boolean;
   station_details: string;
@@ -41,6 +42,9 @@ export interface LeaveApplication {
   nominated_substitute_user_id: number | null;
   substitute_accepted: boolean | null;
   substitute_decline_reason: string;
+  cancellation_status?: string;
+  workflow_kind?: "leave" | "cancellation";
+  workflow_stage?: "unit_head" | "establishment" | "final_authority";
 }
 
 export interface SubstituteNomination {
@@ -56,6 +60,7 @@ export interface LeaveApplicationCreateRequest {
   leave_category_code: string;
   requested_start: string;
   requested_end: string;
+  day_part: "full_day" | "first_half" | "second_half";
   purpose_reason: string;
   station_leave: boolean;
   station_details?: string;
@@ -81,6 +86,7 @@ export interface LeaveHistoryEntry {
   purpose_reason?: string;
   submitted_at?: string;
   available_days?: number;
+  final_decision?: boolean;
   entitlement?: number;
   used?: number;
   carry_forward?: number;
@@ -115,4 +121,19 @@ export interface YearEndProcessingResult {
     total_transactions: number;
     categories_processed: number;
   };
+}
+
+export interface ApprovalRouting {
+  leave_category_code: string;
+  unit_head_role: string;
+  establishment_enabled: boolean | null;
+  establishment_role: string;
+  final_authority_role: string;
+  configured: boolean;
+}
+
+export interface ApprovalDecisionRequest {
+  workflow_kind?: "leave" | "cancellation";
+  outcome: "approved" | "rejected" | "recommended" | "not_recommended" | "routed";
+  comments?: string;
 }
